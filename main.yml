@@ -1,0 +1,86 @@
+name: Build ConstellationX Vocal (Windows x64)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Windows x64 - VST3 + Standalone
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      BUILD_TYPE: Release
+      ARTEFACTS: build/ConstellationXVocal_artefacts/Release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure (CMake, Visual Studio 2022, x64)
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCONSTELLATIONX_BUILD_TESTS=ON 2>&1 | Tee-Object -FilePath configure.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build and run DSP engine tests
+        shell: pwsh
+        run: |
+          cmake --build build --config $env:BUILD_TYPE --target ConstellationXEngineTests 2>&1 | Tee-Object -FilePath engine-tests-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build -C $env:BUILD_TYPE --output-on-failure 2>&1 | Tee-Object -FilePath engine-tests-run.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build VST3 and Standalone
+        shell: pwsh
+        run: |
+          cmake --build build --config $env:BUILD_TYPE --target ConstellationXVocal_VST3 ConstellationXVocal_Standalone --parallel 2>&1 | Tee-Object -FilePath plugin-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify build outputs exist
+        shell: pwsh
+        run: |
+          $vst3 = Join-Path $env:ARTEFACTS "VST3/ConstellationX Vocal.vst3"
+          $exe  = Join-Path $env:ARTEFACTS "Standalone/ConstellationX Vocal.exe"
+          Get-ChildItem -Recurse $env:ARTEFACTS | Select-Object -First 60 FullName
+          if (-not (Test-Path $vst3)) { Write-Error "VST3 not found at $vst3"; exit 1 }
+          if (-not (Test-Path $exe))  { Write-Error "Standalone not found at $exe"; exit 1 }
+          $binary = Get-ChildItem -Recurse $vst3 -Filter *.vst3 -File | Select-Object -First 1
+          if (-not $binary) { Write-Error "VST3 bundle contains no binary"; exit 1 }
+          Write-Host "VST3 binary: $($binary.FullName) ($($binary.Length) bytes)"
+
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: ConstellationXVocal-VST3-win64
+          path: build/ConstellationXVocal_artefacts/Release/VST3/ConstellationX Vocal.vst3
+          if-no-files-found: error
+
+      - name: Upload Standalone
+        uses: actions/upload-artifact@v4
+        with:
+          name: ConstellationXVocal-Standalone-win64
+          path: build/ConstellationXVocal_artefacts/Release/Standalone/ConstellationX Vocal.exe
+          if-no-files-found: error
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            configure.log
+            engine-tests-build.log
+            engine-tests-run.log
+            plugin-build.log
+          if-no-files-found: ignore
