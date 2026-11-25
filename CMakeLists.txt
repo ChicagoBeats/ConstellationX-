@@ -10,7 +10,8 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 option(CONSTELLATIONX_BUILD_TESTS "Build the JUCE-free DSP engine unit tests" OFF)
 if (CONSTELLATIONX_BUILD_TESTS)
     enable_testing()
-    add_executable(ConstellationXEngineTests tests/engine_test.cpp Source/ConstellationEngine.h)
+    add_executable(ConstellationXEngineTests tests/engine_test.cpp tests/preset_test.cpp
+        Source/ConstellationEngine.h Source/ParamTable.h)
     add_test(NAME ConstellationXEngineTests COMMAND ConstellationXEngineTests)
 endif()
 
@@ -49,6 +50,7 @@ target_sources(ConstellationXVocal PRIVATE
     Source/PluginEditor.cpp
     Source/PluginEditor.h
     Source/ConstellationEngine.h
+    Source/ParamTable.h
 )
 
 target_compile_definitions(ConstellationXVocal PUBLIC
