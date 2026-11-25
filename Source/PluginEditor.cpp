@@ -131,13 +131,27 @@ void ConstellationLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::But
     const float rad = r.getHeight() * 0.5f;
     g.setColour(juce::Colour(0xff060607));
     g.fillRoundedRectangle(r, rad);
-    if (down || highlighted)
+    if (b.getToggleState())
+    {
+        g.setColour(accent.withAlpha(0.85f));
+        g.fillRoundedRectangle(r, rad);
+    }
+    else if (down || highlighted)
     {
         g.setColour(accent.withAlpha(down ? 0.55f : 0.25f));
         g.fillRoundedRectangle(r, rad);
     }
     g.setColour(accent.withAlpha(0.85f));
     g.drawRoundedRectangle(r, rad, 2.0f);
+}
+
+void ConstellationLookAndFeel::drawCornerResizer(juce::Graphics& g, int w, int h, bool isMouseOver, bool isMouseDragging)
+{
+    const float fw = (float) w, fh = (float) h;
+    g.setColour(accent.withAlpha(isMouseDragging ? 1.0f : (isMouseOver ? 0.95f : 0.75f)));
+    const float thickness = juce::jmax(1.5f, juce::jmin(fw, fh) * 0.07f);
+    for (float f = 0.30f; f < 0.95f; f += 0.30f)
+        g.drawLine(fw * f, fh, fw, fh * f, thickness);
 }
 
 juce::Font ConstellationLookAndFeel::getTextButtonFont(juce::TextButton&, int buttonHeight)
@@ -170,8 +184,29 @@ ConstellationXVocalAudioProcessorEditor::ConstellationXVocalAudioProcessorEditor
 
     randomize.setColour(juce::TextButton::textColourOffId, kPale);
     randomize.setColour(juce::TextButton::textColourOnId, kPale);
-    randomize.onClick = [this] { processor.randomize(); };
+    randomize.onClick = [this] { processor.randomize(); refreshButtons(); repaint(); };
     addAndMakeVisible(randomize);
+
+    for (auto* b : { &saveBtn, &presetPrev, &presetNext, &slotA, &slotB, &undoTop, &redoTop,
+                     &presetsBtn, &favoritesBtn, &abBtn, &undoBtn, &redoBtn })
+    {
+        b->setColour(juce::TextButton::textColourOffId, kPale);
+        b->setColour(juce::TextButton::textColourOnId, kPale);
+        addAndMakeVisible(*b);
+    }
+    for (auto* b : { &slotA, &slotB })
+        b->setClickingTogglesState(false);
+
+    saveBtn.onClick = [this] { processor.saveUserPreset(); refreshButtons(); repaint(); };
+    presetPrev.onClick = [this] { processor.stepPreset(-1); repaint(); };
+    presetNext.onClick = [this] { processor.stepPreset(1); repaint(); };
+    slotA.onClick = [this] { processor.selectSlot(0); refreshButtons(); repaint(); };
+    slotB.onClick = [this] { processor.selectSlot(1); refreshButtons(); repaint(); };
+    abBtn.onClick = [this] { processor.selectSlot(1 - processor.getActiveSlot()); refreshButtons(); repaint(); };
+    undoTop.onClick = undoBtn.onClick = [this] { doUndo(); };
+    redoTop.onClick = redoBtn.onClick = [this] { doRedo(); };
+    presetsBtn.onClick = [this] { showPresetsMenu(presetsBtn); };
+    favoritesBtn.onClick = [this] { showFavoritesMenu(favoritesBtn); };
 
     for (auto* b : { &skinPrev, &skinNext })
     {
@@ -181,10 +216,14 @@ ConstellationXVocalAudioProcessorEditor::ConstellationXVocalAudioProcessorEditor
     skinPrev.onClick = [this] { setSkin((currentSkin() + 4) % 5); };
     skinNext.onClick = [this] { setSkin((currentSkin() + 1) % 5); };
 
-    setResizable(true, true);
+    setResizable(true, false);   // host may resize; the grip is our own (bottom-right, red)
     setResizeLimits(836, 470, 1920, 1080);
     getConstrainer()->setFixedAspectRatio(1672.0 / 941.0);
+    resizer = std::make_unique<juce::ResizableCornerComponent>(this, getConstrainer());
+    addAndMakeVisible(*resizer);
+    resizer->setAlwaysOnTop(true);
     setSize(1254, 706);
+    refreshButtons();
 
     lastTimeMs = juce::Time::getMillisecondCounterHiRes();
     startTimerHz(40);
@@ -202,6 +241,7 @@ void ConstellationXVocalAudioProcessorEditor::styleKnob(juce::Slider& s, const c
     s.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     s.setRotaryParameters(juce::MathConstants<float>::pi * 1.2f, juce::MathConstants<float>::pi * 2.8f, true);
     s.setMouseDragSensitivity(220);
+    s.onValueChange = [this, &s] { if (s.isMouseOverOrDragging()) markDirty(); };
     addAndMakeVisible(s);
     attachments.push_back(std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         processor.apvts, paramId, s));
@@ -238,6 +278,11 @@ juce::Rectangle<float> ConstellationXVocalAudioProcessorEditor::swatchRect(int i
 
 void ConstellationXVocalAudioProcessorEditor::mouseDown(const juce::MouseEvent& e)
 {
+    if (presetBoxRect().contains(e.position))
+    {
+        showPresetsMenu(*this);
+        return;
+    }
     for (int i = 0; i < 5; ++i)
         if (swatchRect(i).contains(e.position))
         {
@@ -261,6 +306,125 @@ void ConstellationXVocalAudioProcessorEditor::resized()
     randomize.setBounds(R(1468.0f, 715.0f, 150.0f, 54.0f).toNearestInt());
     skinPrev.setBounds(R(60.0f, 858.0f, 44.0f, 44.0f).toNearestInt());
     skinNext.setBounds(R(528.0f, 858.0f, 44.0f, 44.0f).toNearestInt());
+
+    // header bar
+    saveBtn.setBounds(R(575.0f, 18.0f, 72.0f, 46.0f).toNearestInt());
+    presetPrev.setBounds(R(982.0f, 18.0f, 46.0f, 46.0f).toNearestInt());
+    presetNext.setBounds(R(1036.0f, 18.0f, 46.0f, 46.0f).toNearestInt());
+    slotA.setBounds(R(1215.0f, 18.0f, 52.0f, 46.0f).toNearestInt());
+    slotB.setBounds(R(1275.0f, 18.0f, 52.0f, 46.0f).toNearestInt());
+    undoTop.setBounds(R(1350.0f, 18.0f, 82.0f, 46.0f).toNearestInt());
+    redoTop.setBounds(R(1440.0f, 18.0f, 82.0f, 46.0f).toNearestInt());
+
+    // bottom-right bar
+    presetsBtn.setBounds(R(680.0f, 846.0f, 175.0f, 64.0f).toNearestInt());
+    favoritesBtn.setBounds(R(868.0f, 846.0f, 175.0f, 64.0f).toNearestInt());
+    abBtn.setBounds(R(1056.0f, 846.0f, 140.0f, 64.0f).toNearestInt());
+    undoBtn.setBounds(R(1208.0f, 846.0f, 140.0f, 64.0f).toNearestInt());
+    redoBtn.setBounds(R(1362.0f, 846.0f, 150.0f, 64.0f).toNearestInt());
+
+    if (resizer != nullptr)
+    {
+        const int grip = juce::jmax(22, juce::roundToInt(44.0f * scale()));
+        resizer->setBounds(getWidth() - grip, getHeight() - grip, grip, grip);
+    }
+}
+
+juce::Rectangle<float> ConstellationXVocalAudioProcessorEditor::presetBoxRect() const
+{
+    return R(660.0f, 16.0f, 305.0f, 50.0f);
+}
+
+void ConstellationXVocalAudioProcessorEditor::markDirty()
+{
+    dirty = true;
+    lastChangeMs = juce::Time::getMillisecondCounterHiRes();
+}
+
+void ConstellationXVocalAudioProcessorEditor::doUndo()
+{
+    dirty = false;
+    processor.undo();
+    refreshButtons();
+    repaint();
+}
+
+void ConstellationXVocalAudioProcessorEditor::doRedo()
+{
+    dirty = false;
+    processor.redo();
+    refreshButtons();
+    repaint();
+}
+
+void ConstellationXVocalAudioProcessorEditor::refreshButtons()
+{
+    slotA.setToggleState(processor.getActiveSlot() == 0, juce::dontSendNotification);
+    slotB.setToggleState(processor.getActiveSlot() == 1, juce::dontSendNotification);
+    for (auto* b : { &undoTop, &undoBtn }) b->setEnabled(processor.canUndo());
+    for (auto* b : { &redoTop, &redoBtn }) b->setEnabled(processor.canRedo());
+}
+
+void ConstellationXVocalAudioProcessorEditor::showPresetsMenu(juce::Component& target)
+{
+    juce::PopupMenu menu, factory, user;
+    const juce::String current = processor.getPresetName();
+    for (int i = 0; i < cx::kNumFactoryPresets; ++i)
+        factory.addItem(1000 + i, cx::kFactoryPresets[i].name, true, current == cx::kFactoryPresets[i].name);
+
+    const juce::StringArray users = processor.getUserPresetNames();
+    if (users.isEmpty())
+        user.addItem(1, "(none saved yet)", false, false);
+    for (int i = 0; i < users.size(); ++i)
+        user.addItem(2000 + i, users[i], true, current == users[i]);
+
+    menu.addSubMenu("Factory", factory);
+    menu.addSubMenu("User", user);
+    menu.addSeparator();
+    menu.addItem(10, "Save current as new user preset");
+    menu.addItem(11, "Open preset folder");
+
+    juce::Component::SafePointer<ConstellationXVocalAudioProcessorEditor> safe(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&target),
+                       [safe, users](int result)
+                       {
+                           if (safe == nullptr || result == 0) return;
+                           auto& proc = safe->processor;
+                           if (result >= 1000 && result < 2000) proc.loadFactoryPreset(result - 1000);
+                           else if (result >= 2000 && result < 3000 && result - 2000 < users.size())
+                               proc.loadPresetByName(users[result - 2000]);
+                           else if (result == 10) proc.saveUserPreset();
+                           else if (result == 11) ConstellationXVocalAudioProcessor::getPresetDirectory().revealToUser();
+                           safe->refreshButtons();
+                           safe->repaint();
+                       });
+}
+
+void ConstellationXVocalAudioProcessorEditor::showFavoritesMenu(juce::Component& target)
+{
+    juce::PopupMenu menu;
+    const juce::String current = processor.getPresetName();
+    const juce::StringArray favs = processor.getFavorites();
+    if (favs.isEmpty())
+        menu.addItem(1, "(no favorites yet)", false, false);
+    for (int i = 0; i < favs.size(); ++i)
+        menu.addItem(3000 + i, favs[i], true, current == favs[i]);
+    menu.addSeparator();
+    const bool loadable = processor.getAllPresetNames().contains(current);
+    const bool isFav = processor.isFavorite(current);
+    menu.addItem(20, isFav ? "Remove \"" + current + "\" from favorites" : "Add \"" + current + "\" to favorites", loadable);
+
+    juce::Component::SafePointer<ConstellationXVocalAudioProcessorEditor> safe(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&target),
+                       [safe, favs, current, isFav](int result)
+                       {
+                           if (safe == nullptr || result == 0) return;
+                           auto& proc = safe->processor;
+                           if (result >= 3000 && result - 3000 < favs.size()) proc.loadPresetByName(favs[result - 3000]);
+                           else if (result == 20) proc.setFavorite(current, !isFav);
+                           safe->refreshButtons();
+                           safe->repaint();
+                       });
 }
 
 void ConstellationXVocalAudioProcessorEditor::drawLabel(juce::Graphics& g, const juce::String& text,
@@ -324,7 +488,7 @@ void ConstellationXVocalAudioProcessorEditor::drawVortex(juce::Graphics& g, juce
     const float s = scale();
     const auto accent = lnf.accent;
     const bool moving = motion.getToggleState();
-    const float depthValue = processor.apvts.getRawParameterValue("depth")->load();   // -1 fwd .. +1 back
+    const float depthValue = depthVis;   // eased Depth: -1 Forward (vortex contracts) .. +1 Back (vortex expands)
     const float level = juce::jlimit(0.0f, 1.0f, inLevel * 2.5f);
 
     juce::Path clip;
@@ -338,8 +502,8 @@ void ConstellationXVocalAudioProcessorEditor::drawVortex(juce::Graphics& g, juce
 
     // expanding / contracting: slow breathing + depth (Back opens the vortex) + live input level
     const float breathe = moving ? 0.07f * std::sin((float) phase * 0.9f) : 0.0f;
-    const float opening = juce::jlimit(0.35f, 1.0f,
-                                       0.55f + 0.22f * (0.5f * (depthValue + 1.0f)) + breathe + 0.28f * level);
+    const float opening = juce::jlimit(0.28f, 1.0f,
+                                       0.34f + 0.52f * (0.5f * (depthValue + 1.0f)) + breathe + 0.20f * level);
     const float rx = r.getWidth() * 0.5f * opening, ry = r.getHeight() * 0.5f * opening;
     const auto c = r.getCentre();
     const float ph = (float) phase;
@@ -416,6 +580,22 @@ void ConstellationXVocalAudioProcessorEditor::paint(juce::Graphics& g)
     drawPanel(g, R(20.0f, 650.0f, 340.0f, 150.0f));
     drawPanel(g, R(1310.0f, 650.0f, 340.0f, 150.0f));
     drawPanel(g, R(20.0f, 812.0f, 620.0f, 112.0f));
+    drawPanel(g, R(655.0f, 812.0f, 1005.0f, 112.0f));
+    drawPanel(g, R(562.0f, 8.0f, 968.0f, 66.0f));
+
+    // preset display (click to open the preset menu)
+    {
+        auto box = presetBoxRect();
+        g.setColour(juce::Colour(0xff030304));
+        g.fillRoundedRectangle(box, 10.0f * s);
+        g.setColour(accent.withAlpha(0.6f));
+        g.drawRoundedRectangle(box, 10.0f * s, 1.5f * s);
+        g.setColour(kPale);
+        g.setFont(juce::Font(26.0f * s, juce::Font::bold));
+        g.drawFittedText(processor.getPresetName(), R(670.0f, 18.0f, 285.0f, 32.0f).toNearestInt(),
+                         juce::Justification::centred, 1, 0.6f);
+        drawLabel(g, "PRESET", 812.0f, 57.0f, 14.0f, kSteel, false);
+    }
 
     // labels
     drawLabel(g, "SIZE", 267.0f, 464.0f, 24.0f, kPale);
@@ -472,8 +652,6 @@ void ConstellationXVocalAudioProcessorEditor::paint(juce::Graphics& g)
         g.drawRoundedRectangle(sw, 6.0f * s, sel ? 3.0f * s : 1.5f * s);
     }
 
-    drawLabel(g, "CONSTELLATIONX VOCAL   \xe2\x80\xa2   SPATIAL DEPTH PROCESSOR", 1150.0f, 880.0f, 17.0f,
-              kSteel, false);
 }
 
 void ConstellationXVocalAudioProcessorEditor::timerCallback()
@@ -488,6 +666,15 @@ void ConstellationXVocalAudioProcessorEditor::timerCallback()
     follow(lowL, processor.meterLowL.load());
     follow(lowR, processor.meterLowR.load());
     follow(inLevel, processor.meterIn.load());
+    depthVis += 0.12f * (processor.apvts.getRawParameterValue("depth")->load() - depthVis);
+
+    if (dirty && !juce::Desktop::getInstance().getMainMouseSource().isDragging()
+        && juce::Time::getMillisecondCounterHiRes() - lastChangeMs > 300.0)
+    {
+        dirty = false;
+        processor.commitHistory();
+    }
+    refreshButtons();
 
     const int skinNow = currentSkin();
     if (skinNow != shownSkin)

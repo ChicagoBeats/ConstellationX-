@@ -18,6 +18,7 @@ public:
     void drawButtonBackground(juce::Graphics&, juce::Button&, const juce::Colour&, bool highlighted,
                               bool down) override;
     juce::Font getTextButtonFont(juce::TextButton&, int buttonHeight) override;
+    void drawCornerResizer(juce::Graphics&, int w, int h, bool isMouseOver, bool isMouseDragging) override;
 };
 
 class ConstellationXVocalAudioProcessorEditor : public juce::AudioProcessorEditor,
@@ -37,6 +38,14 @@ private:
     void setSkin(int index);
     int currentSkin() const;
 
+    void markDirty();
+    void doUndo();
+    void doRedo();
+    void refreshButtons();
+    void showPresetsMenu(juce::Component& target);
+    void showFavoritesMenu(juce::Component& target);
+    juce::Rectangle<float> presetBoxRect() const;
+
     // Reference-design coordinates (1672 x 941) scaled to the current window size.
     float scale() const { return (float) getWidth() / 1672.0f; }
     juce::Rectangle<float> R(float x, float y, float w, float h) const;
@@ -54,12 +63,20 @@ private:
     juce::Slider depth, size, decay, reflections, width, warmth, air, mix, output;
     juce::ToggleButton motion { "VFX MOTION" };
     juce::TextButton randomize { "RANDOM" }, skinPrev { "<" }, skinNext { ">" };
+    juce::TextButton saveBtn { "SAVE" }, presetPrev { "<" }, presetNext { ">" }, slotA { "A" }, slotB { "B" },
+                     undoTop { "UNDO" }, redoTop { "REDO" };
+    juce::TextButton presetsBtn { "PRESETS" }, favoritesBtn { "FAVORITES" }, abBtn { "A/B" },
+                     undoBtn { "UNDO" }, redoBtn { "REDO" };
+    std::unique_ptr<juce::ResizableCornerComponent> resizer;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> attachments;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> motionAttachment;
 
     double phase = 0.0, lastTimeMs = 0.0;
     float lowL = 0.0f, lowR = 0.0f, inLevel = 0.0f;   // smoothed meter values for animation
     int shownSkin = -1;
+    float depthVis = 0.0f;           // eased copy of the Depth parameter, drives the vortex
+    bool dirty = false;              // a user edit is waiting to be committed to the undo history
+    double lastChangeMs = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ConstellationXVocalAudioProcessorEditor)
 };

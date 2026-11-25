@@ -2,6 +2,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <atomic>
 #include "ConstellationEngine.h"
+#include "ParamTable.h"
 
 class ConstellationXVocalAudioProcessor : public juce::AudioProcessor
 {
@@ -32,9 +33,38 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
-    // Message-thread only. Randomises the musical parameters inside controlled ranges
-    // (never Output, VFX Motion or Skin).
+    // ---- everything below is message-thread only -------------------------------------------
+    cx::ParamState getState() const;                 // current sound parameters (real units)
+    void applyState(const cx::ParamState&);          // sets them (host sees proper gestures)
+
+    // Randomizer: controlled musical ranges; never touches Output, VFX Motion or Skin.
     void randomize();
+
+    // Undo / redo of sound parameters
+    void commitHistory();                            // call after a user edit has settled
+    bool undo();
+    bool redo();
+    bool canUndo() const { return history.canUndo(); }
+    bool canRedo() const { return history.canRedo(); }
+
+    // A/B comparison (slot 0 = A, slot 1 = B)
+    void selectSlot(int slot);
+    int getActiveSlot() const { return activeSlot; }
+
+    // Presets
+    juce::String getPresetName() const { return presetName; }
+    void loadFactoryPreset(int index);
+    bool loadPresetByName(const juce::String& name);   // factory first, then user presets
+    juce::StringArray getUserPresetNames() const;
+    juce::StringArray getAllPresetNames() const;       // factory + user
+    void stepPreset(int delta);
+    juce::String saveUserPreset();                     // saves as "User Preset N"; returns name or empty
+    static juce::File getPresetDirectory();
+
+    // Favorites (preset names, stored next to the user presets)
+    juce::StringArray getFavorites() const;
+    bool isFavorite(const juce::String& name) const;
+    void setFavorite(const juce::String& name, bool shouldBeFavorite);
 
     // Real-time meters written by the audio thread, read by the editor (drives the visuals).
     std::atomic<float> meterLowL { 0.0f }, meterLowR { 0.0f }, meterIn { 0.0f },
@@ -44,9 +74,18 @@ public:
 
 private:
     cx::EngineParams readParams() const;
+    static juce::String stateToString(const cx::ParamState&);
+    static bool stringToState(const juce::String&, cx::ParamState&);
+    static juce::File getFavoritesFile();
 
     cx::Engine engine;
     juce::Random rng;
+
+    cx::ParamHistory history;
+    cx::ParamState slots[2];
+    bool slotValid[2] = { true, false };
+    int activeSlot = 0;
+    juce::String presetName { "INIT" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ConstellationXVocalAudioProcessor)
 };

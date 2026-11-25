@@ -10,34 +10,33 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 {
     using APF = juce::AudioParameterFloat;
     using Cat = juce::AudioProcessorParameter;
+    using juce::NormalisableRange;
+    const auto& P = cx::kParams;
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> p;
 
     // depth: -1 = FORWARD ... +1 = BACK
-    p.push_back(std::make_unique<APF>("depth", "Depth", juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f, "",
+    p.push_back(std::make_unique<APF>(P[cx::kDepth].id, P[cx::kDepth].name,
+        NormalisableRange<float>(P[cx::kDepth].minV, P[cx::kDepth].maxV), P[cx::kDepth].def, "",
         Cat::genericParameter,
         [](float v, int) { return v < -0.005f ? "Fwd " + juce::String(juce::roundToInt(-v * 100.0f))
                          : v > 0.005f ? "Back " + juce::String(juce::roundToInt(v * 100.0f)) : juce::String("Center"); },
         nullptr));
-    p.push_back(std::make_unique<APF>("size", "Size", juce::NormalisableRange<float>(0.0f, 1.0f), 0.5f, "",
-        Cat::genericParameter, pct, fromPct));
-    p.push_back(std::make_unique<APF>("decay", "Decay", juce::NormalisableRange<float>(0.1f, 8.0f, 0.0f, 0.5f), 2.0f, "s",
+
+    for (int i : { (int) cx::kSize, (int) cx::kReflections, (int) cx::kWidth, (int) cx::kWarmth, (int) cx::kAir, (int) cx::kMix })
+        p.push_back(std::make_unique<APF>(P[i].id, P[i].name, NormalisableRange<float>(P[i].minV, P[i].maxV),
+                                          P[i].def, "", Cat::genericParameter, pct, fromPct));
+
+    p.push_back(std::make_unique<APF>(P[cx::kDecay].id, P[cx::kDecay].name,
+        NormalisableRange<float>(P[cx::kDecay].minV, P[cx::kDecay].maxV, 0.0f, 0.5f), P[cx::kDecay].def, "s",
         Cat::genericParameter,
         [](float v, int) { return juce::String(v, 1) + " s"; },
         [](const juce::String& t) { return t.getFloatValue(); }));
-    p.push_back(std::make_unique<APF>("reflections", "Reflections", juce::NormalisableRange<float>(0.0f, 1.0f), 0.60f, "",
-        Cat::genericParameter, pct, fromPct));
-    p.push_back(std::make_unique<APF>("width", "Width", juce::NormalisableRange<float>(0.0f, 1.0f), 0.75f, "",
-        Cat::genericParameter, pct, fromPct));
-    p.push_back(std::make_unique<APF>("warmth", "Warmth", juce::NormalisableRange<float>(0.0f, 1.0f), 0.45f, "",
-        Cat::genericParameter, pct, fromPct));
-    p.push_back(std::make_unique<APF>("air", "Air", juce::NormalisableRange<float>(0.0f, 1.0f), 0.70f, "",
-        Cat::genericParameter, pct, fromPct));
-    p.push_back(std::make_unique<APF>("mix", "Wet Dry", juce::NormalisableRange<float>(0.0f, 1.0f), 0.40f, "",
-        Cat::genericParameter, pct, fromPct));
-    p.push_back(std::make_unique<APF>("output", "Output", juce::NormalisableRange<float>(-24.0f, 12.0f, 0.1f), 0.0f, "dB",
+    p.push_back(std::make_unique<APF>(P[cx::kOutput].id, P[cx::kOutput].name,
+        NormalisableRange<float>(P[cx::kOutput].minV, P[cx::kOutput].maxV, 0.1f), P[cx::kOutput].def, "dB",
         Cat::genericParameter,
         [](float v, int) { return juce::String(v, 1) + "dB"; },
         [](const juce::String& t) { return t.getFloatValue(); }));
+
     p.push_back(std::make_unique<juce::AudioParameterBool>("vfxMotion", "VFX Motion", true));
     p.push_back(std::make_unique<juce::AudioParameterChoice>("skin", "Skin",
         juce::StringArray { "Crimson", "Sapphire", "Violet", "Emerald", "Amber" }, 0));
@@ -51,6 +50,8 @@ ConstellationXVocalAudioProcessor::ConstellationXVocalAudioProcessor()
         .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "CONSTELLATIONX_STATE", createParameterLayout())
 {
+    history.reset(getState());
+    slots[0] = slots[1] = getState();
 }
 
 double ConstellationXVocalAudioProcessor::getTailLengthSeconds() const
@@ -110,42 +111,249 @@ void ConstellationXVocalAudioProcessor::processBlock(juce::AudioBuffer<float>& b
     meterOutL.store(m.outL);  meterOutR.store(m.outR);
 }
 
-void ConstellationXVocalAudioProcessor::randomize()
+// ------------------------------- state / undo / A-B ------------------------------------------
+cx::ParamState ConstellationXVocalAudioProcessor::getState() const
 {
-    struct Range { const char* id; float lo, hi; };
-    static const Range ranges[] = {
-        { "depth", -0.7f, 0.9f },   { "size", 0.15f, 0.85f },  { "decay", 0.5f, 5.0f },
-        { "reflections", 0.2f, 0.85f }, { "width", 0.4f, 0.95f }, { "warmth", 0.0f, 0.75f },
-        { "air", 0.0f, 0.85f },     { "mix", 0.2f, 0.55f }
-    };
-    for (const auto& r : ranges)
+    cx::ParamState s {};
+    for (int i = 0; i < cx::kNumSoundParams; ++i)
+        s[(size_t) i] = apvts.getRawParameterValue(cx::kParams[i].id)->load();
+    return s;
+}
+
+void ConstellationXVocalAudioProcessor::applyState(const cx::ParamState& s)
+{
+    for (int i = 0; i < cx::kNumSoundParams; ++i)
     {
-        if (auto* param = apvts.getParameter(r.id))
+        if (auto* param = apvts.getParameter(cx::kParams[i].id))
         {
-            const float value = r.lo + (r.hi - r.lo) * rng.nextFloat();
             param->beginChangeGesture();
-            param->setValueNotifyingHost(param->convertTo0to1(value));
+            param->setValueNotifyingHost(param->convertTo0to1(cx::clampParam(i, s[(size_t) i])));
             param->endChangeGesture();
         }
     }
 }
 
-juce::AudioProcessorEditor* ConstellationXVocalAudioProcessor::createEditor()
+void ConstellationXVocalAudioProcessor::randomize()
 {
-    return new ConstellationXVocalAudioProcessorEditor(*this);
+    struct Range { int index; float lo, hi; };
+    static const Range ranges[] = {
+        { cx::kDepth, -0.7f, 0.9f },   { cx::kSize, 0.15f, 0.85f },  { cx::kDecay, 0.5f, 5.0f },
+        { cx::kReflections, 0.2f, 0.85f }, { cx::kWidth, 0.4f, 0.95f }, { cx::kWarmth, 0.0f, 0.75f },
+        { cx::kAir, 0.0f, 0.85f },     { cx::kMix, 0.2f, 0.55f }
+    };
+    cx::ParamState s = getState();                  // keeps Output untouched
+    for (const auto& r : ranges)
+        s[(size_t) r.index] = r.lo + (r.hi - r.lo) * rng.nextFloat();
+    applyState(s);
+    presetName = "Random";
+    commitHistory();
+}
+
+void ConstellationXVocalAudioProcessor::commitHistory() { history.commit(getState()); }
+
+bool ConstellationXVocalAudioProcessor::undo()
+{
+    cx::ParamState s;
+    if (!history.undo(s)) return false;
+    applyState(s);
+    return true;
+}
+
+bool ConstellationXVocalAudioProcessor::redo()
+{
+    cx::ParamState s;
+    if (!history.redo(s)) return false;
+    applyState(s);
+    return true;
+}
+
+void ConstellationXVocalAudioProcessor::selectSlot(int slot)
+{
+    slot = juce::jlimit(0, 1, slot);
+    if (slot == activeSlot) return;
+    slots[activeSlot] = getState();                 // remember edits made in the slot we leave
+    slotValid[activeSlot] = true;
+    if (!slotValid[slot]) { slots[slot] = slots[activeSlot]; slotValid[slot] = true; }   // first visit: start from the other slot
+    activeSlot = slot;
+    applyState(slots[slot]);
+    commitHistory();
+}
+
+// ----------------------------------- presets -------------------------------------------------
+juce::File ConstellationXVocalAudioProcessor::getPresetDirectory()
+{
+    auto dir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                   .getChildFile("Chicago Beats Audio Labs").getChildFile("ConstellationX Vocal").getChildFile("Presets");
+    dir.createDirectory();
+    return dir;
+}
+
+juce::File ConstellationXVocalAudioProcessor::getFavoritesFile()
+{
+    return getPresetDirectory().getChildFile("favorites.txt");
+}
+
+void ConstellationXVocalAudioProcessor::loadFactoryPreset(int index)
+{
+    index = juce::jlimit(0, cx::kNumFactoryPresets - 1, index);
+    applyState(cx::factoryState(index));
+    presetName = cx::kFactoryPresets[index].name;
+    commitHistory();
+}
+
+juce::StringArray ConstellationXVocalAudioProcessor::getUserPresetNames() const
+{
+    juce::StringArray names;
+    for (const auto& f : getPresetDirectory().findChildFiles(juce::File::findFiles, false, "*.cxpreset"))
+        names.add(f.getFileNameWithoutExtension());
+    names.sort(true);
+    return names;
+}
+
+juce::StringArray ConstellationXVocalAudioProcessor::getAllPresetNames() const
+{
+    juce::StringArray names;
+    for (int i = 0; i < cx::kNumFactoryPresets; ++i)
+        names.add(cx::kFactoryPresets[i].name);
+    names.addArray(getUserPresetNames());
+    return names;
+}
+
+bool ConstellationXVocalAudioProcessor::loadPresetByName(const juce::String& name)
+{
+    for (int i = 0; i < cx::kNumFactoryPresets; ++i)
+        if (name == cx::kFactoryPresets[i].name)
+        {
+            loadFactoryPreset(i);
+            return true;
+        }
+
+    const auto file = getPresetDirectory().getChildFile(name + ".cxpreset");
+    if (!file.existsAsFile()) return false;
+    auto xml = juce::parseXML(file);
+    if (xml == nullptr || !xml->hasTagName("CXPRESET")) return false;
+
+    cx::ParamState s = getState();
+    for (int i = 0; i < cx::kNumSoundParams; ++i)
+        if (xml->hasAttribute(cx::kParams[i].id))
+            s[(size_t) i] = (float) xml->getDoubleAttribute(cx::kParams[i].id, (double) cx::kParams[i].def);
+    applyState(s);
+    presetName = name;
+    commitHistory();
+    return true;
+}
+
+void ConstellationXVocalAudioProcessor::stepPreset(int delta)
+{
+    const auto names = getAllPresetNames();
+    if (names.isEmpty()) return;
+    int idx = names.indexOf(presetName);
+    idx = idx < 0 ? 0 : (idx + delta + names.size()) % names.size();
+    loadPresetByName(names[idx]);
+}
+
+juce::String ConstellationXVocalAudioProcessor::saveUserPreset()
+{
+    const auto dir = getPresetDirectory();
+    juce::String name;
+    for (int n = 1; n < 10000; ++n)
+    {
+        name = "User Preset " + juce::String(n);
+        if (!dir.getChildFile(name + ".cxpreset").existsAsFile()) break;
+    }
+    juce::XmlElement xml("CXPRESET");
+    xml.setAttribute("name", name);
+    const auto s = getState();
+    for (int i = 0; i < cx::kNumSoundParams; ++i)
+        xml.setAttribute(cx::kParams[i].id, (double) s[(size_t) i]);
+    if (!dir.getChildFile(name + ".cxpreset").replaceWithText(xml.toString()))
+        return {};
+    presetName = name;
+    return name;
+}
+
+// ---------------------------------- favorites ------------------------------------------------
+juce::StringArray ConstellationXVocalAudioProcessor::getFavorites() const
+{
+    juce::StringArray lines;
+    lines.addLines(getFavoritesFile().loadFileAsString());
+    lines.trim();
+    lines.removeEmptyStrings();
+    lines.removeDuplicates(false);
+    return lines;
+}
+
+bool ConstellationXVocalAudioProcessor::isFavorite(const juce::String& name) const
+{
+    return getFavorites().contains(name);
+}
+
+void ConstellationXVocalAudioProcessor::setFavorite(const juce::String& name, bool shouldBeFavorite)
+{
+    auto favs = getFavorites();
+    if (shouldBeFavorite) favs.addIfNotAlreadyThere(name);
+    else favs.removeString(name);
+    getFavoritesFile().replaceWithText(favs.joinIntoString("\n"));
+}
+
+// ------------------------------- persistence --------------------------------------------------
+juce::String ConstellationXVocalAudioProcessor::stateToString(const cx::ParamState& s)
+{
+    juce::StringArray parts;
+    for (float v : s) parts.add(juce::String((double) v, 6));
+    return parts.joinIntoString(",");
+}
+
+bool ConstellationXVocalAudioProcessor::stringToState(const juce::String& text, cx::ParamState& out)
+{
+    juce::StringArray parts;
+    parts.addTokens(text, ",", "");
+    if (parts.size() != cx::kNumSoundParams) return false;
+    for (int i = 0; i < cx::kNumSoundParams; ++i)
+        out[(size_t) i] = cx::clampParam(i, parts[i].getFloatValue());
+    return true;
 }
 
 void ConstellationXVocalAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     if (auto xml = apvts.copyState().createXml())
+    {
+        slots[activeSlot] = getState();
+        auto* extra = xml->createNewChildElement("CX");
+        extra->setAttribute("preset", presetName);
+        extra->setAttribute("slot", activeSlot);
+        extra->setAttribute("validA", slotValid[0] ? 1 : 0);
+        extra->setAttribute("validB", slotValid[1] ? 1 : 0);
+        extra->setAttribute("a", stateToString(slots[0]));
+        extra->setAttribute("b", stateToString(slots[1]));
         copyXmlToBinary(*xml, destData);
+    }
 }
 
 void ConstellationXVocalAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
-    if (auto xml = getXmlFromBinary(data, sizeInBytes))
-        if (xml->hasTagName(apvts.state.getType()))
-            apvts.replaceState(juce::ValueTree::fromXml(*xml));
+    auto xml = getXmlFromBinary(data, sizeInBytes);
+    if (xml == nullptr || !xml->hasTagName(apvts.state.getType()))
+        return;
+
+    if (auto* extra = xml->getChildByName("CX"))
+    {
+        presetName = extra->getStringAttribute("preset", "INIT");
+        activeSlot = juce::jlimit(0, 1, extra->getIntAttribute("slot", 0));
+        cx::ParamState a, b;
+        if (stringToState(extra->getStringAttribute("a"), a)) slots[0] = a;
+        if (stringToState(extra->getStringAttribute("b"), b)) slots[1] = b;
+        slotValid[0] = extra->getIntAttribute("validA", 1) != 0;
+        slotValid[1] = extra->getIntAttribute("validB", 0) != 0;
+        xml->removeChildElement(extra, true);
+    }
+    apvts.replaceState(juce::ValueTree::fromXml(*xml));
+    history.reset(getState());
+}
+
+juce::AudioProcessorEditor* ConstellationXVocalAudioProcessor::createEditor()
+{
+    return new ConstellationXVocalAudioProcessorEditor(*this);
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
