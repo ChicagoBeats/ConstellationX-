@@ -52,6 +52,12 @@ private:
     juce::Rectangle<float> swatchRect(int i) const;
 
     void drawPanel(juce::Graphics&, juce::Rectangle<float>);
+    void ensureLayers();
+    void renderLayers();
+    void renderBackground(juce::Graphics&);
+    void renderForeground(juce::Graphics&);
+    void drawSpeakerHousing(juce::Graphics&, juce::Point<float> centre, float radius);
+    void fillCarbon(juce::Graphics&, const juce::Path&);
     void drawSpeaker(juce::Graphics&, juce::Point<float> centre, float radius, float level);
     void drawVortex(juce::Graphics&, juce::Rectangle<float>);
     void drawLabel(juce::Graphics&, const juce::String&, float cx, float cy, float refFontHeight,
@@ -74,6 +80,12 @@ private:
     double phase = 0.0, lastTimeMs = 0.0;
     float lowL = 0.0f, lowR = 0.0f, inLevel = 0.0f;   // smoothed meter values for animation
     int shownSkin = -1;
+    // cached static artwork (rebuilt on resize / skin change); live parts are painted between the layers
+    juce::Image bgImage, fgImage, carbonTile;
+    int layerW = 0, layerH = 0;
+    float layerScale = 1.0f;
+    juce::Colour layerAccent;
+
     float depthVis = 0.0f;           // eased copy of the Depth parameter, drives the vortex
     bool dirty = false;              // a user edit is waiting to be committed to the undo history
     double lastChangeMs = 0.0;

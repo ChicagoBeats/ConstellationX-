@@ -26,44 +26,148 @@ void drawCrown(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour c)
     g.setColour(c);
     g.fillPath(p);
 }
+
+const juce::Colour kSilver(0xffdcdce4);
+
+juce::Path chamfered(juce::Rectangle<float> r, float cut)
+{
+    juce::Path p;
+    p.startNewSubPath(r.getX() + cut, r.getY());
+    p.lineTo(r.getRight() - cut, r.getY());
+    p.lineTo(r.getRight(), r.getY() + cut);
+    p.lineTo(r.getRight(), r.getBottom() - cut);
+    p.lineTo(r.getRight() - cut, r.getBottom());
+    p.lineTo(r.getX() + cut, r.getBottom());
+    p.lineTo(r.getX(), r.getBottom() - cut);
+    p.lineTo(r.getX(), r.getY() + cut);
+    p.closeSubPath();
+    return p;
+}
+
+juce::ColourGradient chromeGradient(juce::Rectangle<float> b)
+{
+    juce::ColourGradient grad(juce::Colour(0xfff4f4f8), b.getX(), b.getY(),
+                              juce::Colour(0xff55555d), b.getX(), b.getBottom(), false);
+    grad.addColour(0.22, juce::Colour(0xff9494a0));
+    grad.addColour(0.48, juce::Colour(0xff25252b));
+    grad.addColour(0.74, juce::Colour(0xffa6a6b0));
+    return grad;
+}
+
+void chromeStroke(juce::Graphics& g, const juce::Path& p, float thickness)
+{
+    g.setGradientFill(chromeGradient(p.getBounds()));
+    g.strokePath(p, juce::PathStrokeType(thickness, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
+
+void chromeFill(juce::Graphics& g, const juce::Path& p)
+{
+    g.setGradientFill(chromeGradient(p.getBounds()));
+    g.fillPath(p);
+}
+
+// Red neon: three soft halo passes plus a bright core. w is the core-ish width.
+void neonStroke(juce::Graphics& g, const juce::Path& p, juce::Colour c, float w, float intensity = 1.0f)
+{
+    const float widths[3] = { 2.6f, 1.8f, 1.25f };
+    const float alphas[3] = { 0.10f, 0.18f, 0.30f };
+    for (int i = 0; i < 3; ++i)
+    {
+        g.setColour(c.withAlpha(alphas[i] * intensity));
+        g.strokePath(p, juce::PathStrokeType(w * widths[i], juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+    g.setColour(c.brighter(0.35f).withAlpha(juce::jlimit(0.0f, 1.0f, 0.95f * intensity)));
+    g.strokePath(p, juce::PathStrokeType(w * 0.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
+
+void drawHexMesh(juce::Graphics& g, juce::Rectangle<float> area, float radius, juce::Colour colour)
+{
+    juce::Graphics::ScopedSaveState state(g);
+    g.reduceClipRegion(area.toNearestInt());
+    const float w = std::sqrt(3.0f) * radius, h = 1.5f * radius;
+    juce::Path mesh;
+    int row = 0;
+    for (float y = area.getY() - radius; y < area.getBottom() + radius; y += h, ++row)
+        for (float x = area.getX() - w + ((row & 1) ? w * 0.5f : 0.0f); x < area.getRight() + w; x += w)
+            for (int k = 0; k < 6; ++k)
+            {
+                const float a = juce::MathConstants<float>::pi / 3.0f * (float) k + juce::MathConstants<float>::pi / 6.0f;
+                const float px = x + std::cos(a) * radius * 0.9f, py = y + std::sin(a) * radius * 0.9f;
+                if (k == 0) mesh.startNewSubPath(px, py); else mesh.lineTo(px, py);
+                if (k == 5) mesh.closeSubPath();
+            }
+    g.setColour(colour);
+    g.strokePath(mesh, juce::PathStrokeType(juce::jmax(0.6f, radius * 0.08f)));
+}
+
+// 2x2 twill weave tile, built at physical-pixel resolution.
+juce::Image makeCarbonTile(int cell)
+{
+    cell = juce::jmax(3, cell);
+    juce::Image tile(juce::Image::ARGB, cell * 2, cell * 2, true);
+    juce::Graphics g(tile);
+    for (int ty = 0; ty < 2; ++ty)
+        for (int tx = 0; tx < 2; ++tx)
+        {
+            const juce::Rectangle<float> r((float) (tx * cell), (float) (ty * cell), (float) cell, (float) cell);
+            const bool horizontal = ((tx + ty) & 1) == 0;
+            juce::ColourGradient grad(juce::Colour(0xff09090c), r.getX(), r.getY(), juce::Colour(0xff09090c),
+                                      horizontal ? r.getRight() : r.getX(), horizontal ? r.getY() : r.getBottom(), false);
+            grad.addColour(0.5, horizontal ? juce::Colour(0xff26262e) : juce::Colour(0xff1b1b21));
+            g.setGradientFill(grad);
+            g.fillRect(r);
+        }
+    return tile;
+}
 } // namespace
 
 // ============================== Look and feel ===============================
+
 void ConstellationLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h,
                                                 float pos, float startA, float endA, juce::Slider& s)
 {
-    const float d = (float) juce::jmin(w, h) - 4.0f;
+    const float R = ((float) juce::jmin(w, h) - 4.0f) * 0.5f;
     const auto c = juce::Rectangle<float>((float) x, (float) y, (float) w, (float) h).getCentre();
-    const float ringR = d * 0.5f * 0.92f;
     const float ang = startA + pos * (endA - startA);
+    auto circle = [&](float r) { return juce::Rectangle<float>(r * 2.0f, r * 2.0f).withCentre(c); };
 
+    // chrome bezel with a dark trough
+    juce::Path bezel;
+    bezel.addEllipse(circle(R * 0.98f));
+    bezel.addEllipse(circle(R * 0.85f));
+    bezel.setUsingNonZeroWinding(false);
+    g.setGradientFill(chromeGradient(circle(R * 0.98f)));
+    g.fillPath(bezel);
+    g.setColour(juce::Colour(0xff020203));
+    g.fillEllipse(circle(R * 0.85f));
+
+    // red value arc with neon glow
+    const float arcR = R * 0.74f;
     juce::Path track;
-    track.addCentredArc(c.x, c.y, ringR, ringR, 0.0f, startA, endA, true);
-    g.setColour(accent.withAlpha(0.20f));
-    g.strokePath(track, juce::PathStrokeType(d * 0.05f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
+    track.addCentredArc(c.x, c.y, arcR, arcR, 0.0f, startA, endA, true);
+    g.setColour(accent.withAlpha(0.18f));
+    g.strokePath(track, juce::PathStrokeType(R * 0.08f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     juce::Path val;
-    val.addCentredArc(c.x, c.y, ringR, ringR, 0.0f, startA, ang, true);
-    g.setColour(accent.withAlpha(0.30f));
-    g.strokePath(val, juce::PathStrokeType(d * 0.11f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    g.setColour(accent);
-    g.strokePath(val, juce::PathStrokeType(d * 0.05f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    val.addCentredArc(c.x, c.y, arcR, arcR, 0.0f, startA, ang, true);
+    neonStroke(g, val, accent, R * 0.08f);
 
-    auto body = juce::Rectangle<float>(d * 0.70f, d * 0.70f).withCentre(c);
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff3b3a41), c.x, body.getY(),
-                                           juce::Colour(0xff040405), c.x, body.getBottom(), false));
-    g.fillEllipse(body);
-    g.setColour(juce::Colour(0xffa09da6).withAlpha(0.55f));
-    g.drawEllipse(body, juce::jmax(1.0f, d * 0.012f));
+    // glossy dome
+    const auto dome = circle(R * 0.62f);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff55545c), c.x - R * 0.25f, c.y - R * 0.35f,
+                                           juce::Colour(0xff050506), c.x + R * 0.30f, c.y + R * 0.45f, true));
+    g.fillEllipse(dome);
+    g.setGradientFill(chromeGradient(dome));
+    g.drawEllipse(dome, juce::jmax(1.0f, R * 0.018f));
 
-    const float r0 = body.getWidth() * 0.5f * 0.80f, r1 = body.getWidth() * 0.5f * 0.97f;
+    // pointer marker on the bezel
+    juce::Path tri;
+    tri.addTriangle(c.x, c.y - R * 0.80f, c.x - R * 0.045f, c.y - R * 0.95f, c.x + R * 0.045f, c.y - R * 0.95f);
     g.setColour(kPale);
-    g.drawLine(c.x + std::sin(ang) * r0, c.y - std::cos(ang) * r0,
-               c.x + std::sin(ang) * r1, c.y - std::cos(ang) * r1, juce::jmax(1.5f, d * 0.025f));
+    g.fillPath(tri, juce::AffineTransform::rotation(ang, c.x, c.y));
 
     g.setColour(kPale);
-    g.setFont(juce::Font(d * 0.22f, juce::Font::bold));
-    g.drawFittedText(s.getTextFromValue(s.getValue()), body.reduced(body.getWidth() * 0.08f).toNearestInt(),
+    g.setFont(juce::Font(R * 0.40f, juce::Font::bold));
+    g.drawFittedText(s.getTextFromValue(s.getValue()), dome.reduced(R * 0.06f).toNearestInt(),
                      juce::Justification::centred, 1, 0.6f);
 }
 
@@ -72,18 +176,20 @@ int ConstellationLookAndFeel::getSliderThumbRadius(juce::Slider& s)
     return (int) ((float) s.getHeight() * 0.38f);
 }
 
+
 void ConstellationLookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int w, int h, float sliderPos,
                                                 float, float, juce::Slider::SliderStyle, juce::Slider& s)
 {
     const float tr = (float) getSliderThumbRadius(s);
     const float cy = (float) y + (float) h * 0.5f;
-    const float th = (float) h * 0.20f;
+    const float th = (float) h * 0.22f;
     juce::Rectangle<float> track((float) x + tr * 0.3f, cy - th * 0.5f, (float) w - tr * 0.6f, th);
 
-    g.setColour(juce::Colour(0xff030304));
-    g.fillRoundedRectangle(track, th * 0.5f);
-    g.setColour(accent.withAlpha(0.45f));
-    g.drawRoundedRectangle(track, th * 0.5f, 1.5f);
+    juce::Path tp;
+    tp.addRoundedRectangle(track, th * 0.5f);
+    g.setColour(juce::Colour(0xff020203));
+    g.fillPath(tp);
+    chromeStroke(g, tp, juce::jmax(1.5f, th * 0.16f));
 
     const float centreX = track.getCentreX();
     const float x0 = juce::jmin(centreX, sliderPos), x1 = juce::jmax(centreX, sliderPos);
@@ -94,13 +200,18 @@ void ConstellationLookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y,
 
     auto thumb = juce::Rectangle<float>(tr * 2.0f, tr * 2.0f).withCentre({ sliderPos, cy });
     g.setColour(accent.withAlpha(0.25f));
-    g.fillEllipse(thumb.expanded(tr * 0.18f));
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff34333a), thumb.getCentreX(), thumb.getY(),
-                                           juce::Colour(0xff020203), thumb.getCentreX(), thumb.getBottom(), false));
+    g.fillEllipse(thumb.expanded(tr * 0.20f));
+    g.setGradientFill(chromeGradient(thumb));
     g.fillEllipse(thumb);
-    g.setColour(accent);
-    g.drawEllipse(thumb, juce::jmax(1.5f, tr * 0.07f));
-    drawCrown(g, juce::Rectangle<float>(tr * 0.95f, tr * 0.62f).withCentre(thumb.getCentre()), kGold);
+    g.setColour(juce::Colour(0xff020203));
+    g.fillEllipse(thumb.reduced(tr * 0.14f));
+    auto dome = thumb.reduced(tr * 0.22f);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff4d4c54), dome.getCentreX() - tr * 0.25f, dome.getY(),
+                                           juce::Colour(0xff050506), dome.getCentreX() + tr * 0.3f, dome.getBottom(), true));
+    g.fillEllipse(dome);
+    g.setColour(accent.withAlpha(0.9f));
+    g.drawEllipse(dome, juce::jmax(1.2f, tr * 0.05f));
+    drawCrown(g, juce::Rectangle<float>(tr * 0.95f, tr * 0.62f).withCentre(thumb.getCentre()), kSilver);
 }
 
 void ConstellationLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& b, bool highlighted, bool)
@@ -124,25 +235,30 @@ void ConstellationLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleB
     g.drawText("OFF", right.toNearestInt(), juce::Justification::centred);
 }
 
+
 void ConstellationLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b, const juce::Colour&,
                                                     bool highlighted, bool down)
 {
     auto r = b.getLocalBounds().toFloat().reduced(1.5f);
-    const float rad = r.getHeight() * 0.5f;
-    g.setColour(juce::Colour(0xff060607));
-    g.fillRoundedRectangle(r, rad);
+    const float rad = juce::jmin(r.getHeight() * 0.22f, 14.0f);
+    juce::Path p;
+    p.addRoundedRectangle(r, rad);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff2b2a31), r.getX(), r.getY(),
+                                           juce::Colour(0xff060607), r.getX(), r.getBottom(), false));
+    g.fillPath(p);
     if (b.getToggleState())
     {
-        g.setColour(accent.withAlpha(0.85f));
-        g.fillRoundedRectangle(r, rad);
+        g.setColour(accent.withAlpha(0.80f));
+        g.fillPath(p);
     }
     else if (down || highlighted)
     {
         g.setColour(accent.withAlpha(down ? 0.55f : 0.25f));
-        g.fillRoundedRectangle(r, rad);
+        g.fillPath(p);
     }
-    g.setColour(accent.withAlpha(0.85f));
-    g.drawRoundedRectangle(r, rad, 2.0f);
+    chromeStroke(g, p, 2.0f);
+    g.setColour(accent.withAlpha(b.isEnabled() ? 0.45f : 0.15f));
+    g.drawRoundedRectangle(r.reduced(3.5f), rad * 0.7f, 1.0f);
 }
 
 void ConstellationLookAndFeel::drawCornerResizer(juce::Graphics& g, int w, int h, bool isMouseOver, bool isMouseDragging)
@@ -300,7 +416,7 @@ void ConstellationXVocalAudioProcessorEditor::resized()
     static const float kx[6] = { 445.0f, 603.0f, 763.0f, 920.0f, 1077.0f, 1230.0f };
     juce::Slider* knobs[6] = { &reflections, &width, &warmth, &air, &mix, &output };
     for (int i = 0; i < 6; ++i)
-        knobs[i]->setBounds(R(kx[i] - 62.0f, 741.0f - 62.0f, 124.0f, 124.0f).toNearestInt());
+        knobs[i]->setBounds(R(kx[i] - 56.0f, 736.0f - 56.0f, 112.0f, 112.0f).toNearestInt());
 
     motion.setBounds(R(70.0f, 712.0f, 175.0f, 58.0f).toNearestInt());
     randomize.setBounds(R(1468.0f, 715.0f, 150.0f, 54.0f).toNearestInt());
@@ -438,49 +554,124 @@ void ConstellationXVocalAudioProcessorEditor::drawLabel(juce::Graphics& g, const
                juce::Justification::centred);
 }
 
+
+void ConstellationXVocalAudioProcessorEditor::fillCarbon(juce::Graphics& g, const juce::Path& p)
+{
+    g.setFillType(juce::FillType(carbonTile, juce::AffineTransform::scale(1.0f / layerScale)));
+    g.fillPath(p);
+}
+
 void ConstellationXVocalAudioProcessorEditor::drawPanel(juce::Graphics& g, juce::Rectangle<float> r)
 {
     const float s = scale();
-    g.setColour(kPanel);
-    g.fillRoundedRectangle(r, 18.0f * s);
-    g.setColour(lnf.accent.withAlpha(0.18f));
-    g.drawRoundedRectangle(r.reduced(5.0f * s), 14.0f * s, 4.0f * s);
-    g.setColour(lnf.accent.withAlpha(0.75f));
-    g.drawRoundedRectangle(r, 18.0f * s, 2.0f * s);
+    const auto accent = lnf.accent;
+    const auto path = chamfered(r, 20.0f * s).createPathWithRoundedCorners(4.0f * s);
+
+    fillCarbon(g, path);
+    g.setColour(juce::Colour(0xd0070709));
+    g.fillPath(path);
+
+    {   // red floor glow along the bottom edge
+        juce::Graphics::ScopedSaveState state(g);
+        g.reduceClipRegion(path);
+        g.setGradientFill(juce::ColourGradient(accent.withAlpha(0.0f), r.getCentreX(), r.getY() + r.getHeight() * 0.55f,
+                                               accent.withAlpha(0.38f), r.getCentreX(), r.getBottom(), false));
+        g.fillRect(r);
+    }
+    chromeStroke(g, path, 3.5f * s);
+    neonStroke(g, chamfered(r.reduced(6.0f * s), 16.0f * s).createPathWithRoundedCorners(3.0f * s), accent, 1.1f * s, 0.55f);
 }
 
+
+// Static chrome housing, ring and bolts (cached in the background layer).
+void ConstellationXVocalAudioProcessorEditor::drawSpeakerHousing(juce::Graphics& g, juce::Point<float> c, float R)
+{
+    auto circle = [&](float r) { return juce::Rectangle<float>(r * 2.0f, r * 2.0f).withCentre(c); };
+    const float deg = juce::MathConstants<float>::pi / 180.0f;
+
+    juce::Path oct;
+    for (int k = 0; k < 8; ++k)
+    {
+        const float a = (22.5f + 45.0f * (float) k) * deg;
+        const float px = c.x + std::cos(a) * R, py = c.y + std::sin(a) * R;
+        if (k == 0) oct.startNewSubPath(px, py); else oct.lineTo(px, py);
+    }
+    oct.closeSubPath();
+    const auto housing = oct.createPathWithRoundedCorners(R * 0.10f);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff2a292f), c.x, c.y - R, juce::Colour(0xff060607),
+                                           c.x, c.y + R, false));
+    g.fillPath(housing);
+    chromeStroke(g, housing, R * 0.045f);
+
+    juce::Path ring;
+    ring.addEllipse(circle(R * 0.80f));
+    ring.addEllipse(circle(R * 0.73f));
+    ring.setUsingNonZeroWinding(false);
+    chromeFill(g, ring);
+    g.setColour(juce::Colour(0xff040405));
+    g.fillEllipse(circle(R * 0.73f));
+
+    for (int k = 0; k < 8; ++k)
+    {
+        const float a = (22.5f + 45.0f * (float) k) * deg;
+        const juce::Point<float> p(c.x + std::cos(a) * R * 0.90f, c.y + std::sin(a) * R * 0.90f);
+        const float br = R * 0.028f;
+        const auto bolt = juce::Rectangle<float>(br * 2.0f, br * 2.0f).withCentre(p);
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xffe6e6ee), p.x - br * 0.4f, p.y - br * 0.4f,
+                                               juce::Colour(0xff17171b), p.x + br, p.y + br, true));
+        g.fillEllipse(bolt);
+    }
+}
+
+// Live part: halo, neon segments, rubber surround, cone and dust cap, driven by the real sub-band level.
 void ConstellationXVocalAudioProcessorEditor::drawSpeaker(juce::Graphics& g, juce::Point<float> c,
-                                                           float radius, float level)
+                                                           float R, float level)
 {
     const auto accent = lnf.accent;
-    auto circle = [&](float rr) { return juce::Rectangle<float>(rr * 2.0f, rr * 2.0f).withCentre(c); };
+    auto circle = [&](float r) { return juce::Rectangle<float>(r * 2.0f, r * 2.0f).withCentre(c); };
+    const float deg = juce::MathConstants<float>::pi / 180.0f;
 
-    g.setColour(accent.withAlpha(0.08f + 0.22f * level));
-    g.fillEllipse(circle(radius * 1.10f));
+    g.setGradientFill(juce::ColourGradient(accent.withAlpha(0.12f + 0.30f * level), c.x, c.y,
+                                           accent.withAlpha(0.0f), c.x + R * 1.15f, c.y, true));
+    g.fillEllipse(circle(R * 1.15f));
 
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff55545b), c.x, c.y - radius, juce::Colour(0xff0a0a0c),
-                                           c.x, c.y + radius, false));
-    g.fillEllipse(circle(radius));
-    g.setColour(accent.withAlpha(0.85f));
-    g.drawEllipse(circle(radius * 0.97f), radius * 0.045f);
-    g.setColour(juce::Colour(0xff060608));
-    g.fillEllipse(circle(radius * 0.86f));
+    // neon segments on the housing face pulse with the low-frequency level
+    for (int k = 0; k < 8; ++k)
+    {
+        juce::Path arc;
+        const float a0 = (45.0f * (float) k + 8.0f) * deg;
+        arc.addCentredArc(c.x, c.y, R * 0.87f, R * 0.87f, 0.0f, a0, a0 + 29.0f * deg, true);
+        neonStroke(g, arc, accent, R * 0.030f, 0.45f + 0.55f * level);
+    }
+
+    // glossy rubber surround
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff3a393f), c.x - R * 0.3f, c.y - R * 0.4f,
+                                           juce::Colour(0xff030304), c.x + R * 0.3f, c.y + R * 0.4f, false));
+    g.fillEllipse(circle(R * 0.70f));
     g.setColour(accent.withAlpha(0.35f));
-    g.drawEllipse(circle(radius * 0.80f), radius * 0.02f);
+    g.drawEllipse(circle(R * 0.66f), juce::jmax(1.0f, R * 0.012f));
 
-    // cone: excursion follows the real sub-band level
-    const float cone = radius * 0.70f * (1.0f + 0.07f * level);
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff2b2a30), c.x, c.y - cone, juce::Colour(0xff050506),
-                                           c.x, c.y + cone, false));
+    // cone with fine concentric grooves; excursion follows the sub-band level
+    const float cone = R * 0.58f * (1.0f + 0.07f * level);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff2f2e35), c.x - cone * 0.4f, c.y - cone * 0.5f,
+                                           juce::Colour(0xff030304), c.x + cone * 0.5f, c.y + cone * 0.6f, true));
     g.fillEllipse(circle(cone));
-    g.setColour(juce::Colour(0xff6c6a73).withAlpha(0.6f));
-    for (int i = 1; i <= 4; ++i)
-        g.drawEllipse(circle(cone * (1.0f - 0.17f * (float) i)), juce::jmax(1.0f, radius * 0.008f));
-    g.setColour(juce::Colour(0xff09090b));
-    g.fillEllipse(circle(radius * 0.26f * (1.0f + 0.10f * level)));
-    g.setColour(accent.withAlpha(0.7f));
-    g.drawEllipse(circle(radius * 0.26f * (1.0f + 0.10f * level)), radius * 0.02f);
-    drawCrown(g, juce::Rectangle<float>(radius * 0.26f, radius * 0.17f).withCentre(c), kGold);
+    g.setColour(juce::Colour(0xff8a8892).withAlpha(0.22f));
+    for (int i = 1; i <= 14; ++i)
+        g.drawEllipse(circle(cone * ((float) i / 15.0f)), juce::jmax(0.8f, R * 0.005f));
+    juce::Path sheen;
+    sheen.addCentredArc(c.x, c.y, cone * 0.78f, cone * 0.78f, 0.0f, -70.0f * deg, -20.0f * deg, true);
+    g.setColour(juce::Colours::white.withAlpha(0.16f));
+    g.strokePath(sheen, juce::PathStrokeType(R * 0.03f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    // dust cap with silver crown
+    const float cap = R * 0.24f * (1.0f + 0.10f * level);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff5a5960), c.x - cap * 0.4f, c.y - cap * 0.5f,
+                                           juce::Colour(0xff0a0a0c), c.x + cap * 0.6f, c.y + cap * 0.7f, true));
+    g.fillEllipse(circle(cap));
+    g.setGradientFill(chromeGradient(circle(cap)));
+    g.drawEllipse(circle(cap), juce::jmax(1.0f, R * 0.016f));
+    drawCrown(g, juce::Rectangle<float>(cap * 1.0f, cap * 0.64f).withCentre(c), kSilver);
 }
 
 void ConstellationXVocalAudioProcessorEditor::drawVortex(juce::Graphics& g, juce::Rectangle<float> r)
@@ -544,35 +735,73 @@ void ConstellationXVocalAudioProcessorEditor::drawVortex(juce::Graphics& g, juce
     g.drawRoundedRectangle(r.reduced(1.0f), 22.0f * s, 3.0f * s);
 }
 
-void ConstellationXVocalAudioProcessorEditor::paint(juce::Graphics& g)
+void ConstellationXVocalAudioProcessorEditor::ensureLayers()
+{
+    if (bgImage.isNull() || layerW != getWidth() || layerH != getHeight() || layerAccent != lnf.accent)
+        renderLayers();
+}
+
+void ConstellationXVocalAudioProcessorEditor::renderLayers()
+{
+    layerW = getWidth();
+    layerH = getHeight();
+    layerAccent = lnf.accent;
+    layerScale = layerW > 1400 ? 1.0f : 2.0f;   // supersample small windows for crisp edges
+    const int pw = juce::jmax(1, juce::roundToInt((float) layerW * layerScale));
+    const int ph = juce::jmax(1, juce::roundToInt((float) layerH * layerScale));
+    carbonTile = makeCarbonTile(juce::roundToInt(4.0f * scale() * layerScale));
+
+    bgImage = juce::Image(juce::Image::ARGB, pw, ph, true);
+    {
+        juce::Graphics g(bgImage);
+        g.addTransform(juce::AffineTransform::scale(layerScale));
+        renderBackground(g);
+    }
+    fgImage = juce::Image(juce::Image::ARGB, pw, ph, true);
+    {
+        juce::Graphics g(fgImage);
+        g.addTransform(juce::AffineTransform::scale(layerScale));
+        renderForeground(g);
+    }
+}
+
+void ConstellationXVocalAudioProcessorEditor::renderBackground(juce::Graphics& g)
 {
     const float s = scale();
     const auto accent = lnf.accent;
+    const auto bounds = getLocalBounds().toFloat();
+
     g.fillAll(kBlack);
+    juce::Path all;
+    all.addRectangle(bounds);
+    fillCarbon(g, all);
 
-    // outer frame
-    g.setColour(accent.withAlpha(0.25f));
-    g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(6.0f * s), 20.0f * s, 5.0f * s);
-    g.setColour(accent.withAlpha(0.8f));
-    g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(6.0f * s), 20.0f * s, 1.5f * s);
+    g.setGradientFill(juce::ColourGradient(juce::Colours::transparentBlack, bounds.getCentreX(), bounds.getCentreY(),
+                                           juce::Colour(0xd8000000), bounds.getX(), bounds.getY(), true));
+    g.fillRect(bounds);
 
-    // title block
-    drawCrown(g, R(68.0f, 22.0f, 84.0f, 56.0f), kGold);
-    g.setColour(kPale);
-    g.setFont(juce::Font(46.0f * s, juce::Font::bold | juce::Font::italic));
-    g.drawText("CONSTELLATION", R(170.0f, 14.0f, 340.0f, 56.0f).toNearestInt(), juce::Justification::left);
-    g.setColour(accent);
-    g.setFont(juce::Font(52.0f * s, juce::Font::bold | juce::Font::italic));
-    g.drawText("X", R(452.0f, 10.0f, 60.0f, 60.0f).toNearestInt(), juce::Justification::left);
-    drawLabel(g, "V   O   C   A   L", 325.0f, 66.0f, 22.0f, kPale, false);
-    drawLabel(g, "CHICAGO BEATS AUDIO LABS", 322.0f, 88.0f, 15.0f, kPale.withAlpha(0.8f), false);
+    const auto v = R(380.0f, 85.0f, 910.0f, 420.0f);
+    g.setGradientFill(juce::ColourGradient(accent.withAlpha(0.30f), v.getCentreX(), v.getCentreY(),
+                                           accent.withAlpha(0.0f), v.getCentreX() + 620.0f * s, v.getCentreY(), true));
+    g.fillRect(bounds);
 
-    // animated vortex + dual subwoofers (all driven by live audio meters)
-    drawVortex(g, R(380.0f, 85.0f, 910.0f, 420.0f));
-    drawSpeaker(g, { 175.0f * s, 310.0f * s }, 165.0f * s, juce::jlimit(0.0f, 1.0f, lowL * 4.0f));
-    drawSpeaker(g, { 1495.0f * s, 310.0f * s }, 165.0f * s, juce::jlimit(0.0f, 1.0f, lowR * 4.0f));
+    drawHexMesh(g, R(8.0f, 110.0f, 150.0f, 380.0f), 9.0f * s, juce::Colour(0xff3a3a42).withAlpha(0.7f));
+    drawHexMesh(g, R(1514.0f, 110.0f, 150.0f, 380.0f), 9.0f * s, juce::Colour(0xff3a3a42).withAlpha(0.7f));
 
-    // panels
+    drawSpeakerHousing(g, { 175.0f * s, 310.0f * s }, 165.0f * s);
+    drawSpeakerHousing(g, { 1495.0f * s, 310.0f * s }, 165.0f * s);
+
+    chromeStroke(g, chamfered(bounds.reduced(8.0f * s), 40.0f * s).createPathWithRoundedCorners(6.0f * s), 7.0f * s);
+    neonStroke(g, chamfered(bounds.reduced(17.0f * s), 34.0f * s).createPathWithRoundedCorners(5.0f * s),
+               accent, 2.0f * s, 0.8f);
+}
+
+void ConstellationXVocalAudioProcessorEditor::renderForeground(juce::Graphics& g)
+{
+    const float s = scale();
+    const auto accent = lnf.accent;
+
+    // panels (drawn over the speakers where they overlap, as in the reference)
     drawPanel(g, R(112.0f, 450.0f, 260.0f, 190.0f));
     drawPanel(g, R(1300.0f, 450.0f, 260.0f, 190.0f));
     drawPanel(g, R(415.0f, 478.0f, 845.0f, 140.0f));
@@ -583,19 +812,49 @@ void ConstellationXVocalAudioProcessorEditor::paint(juce::Graphics& g)
     drawPanel(g, R(655.0f, 812.0f, 1005.0f, 112.0f));
     drawPanel(g, R(562.0f, 8.0f, 968.0f, 66.0f));
 
-    // preset display (click to open the preset menu)
+    // individual dark cells behind the six knobs
+    static const float kx[6] = { 445.0f, 603.0f, 763.0f, 920.0f, 1077.0f, 1230.0f };
+    for (int i = 0; i < 6; ++i)
     {
-        auto box = presetBoxRect();
-        g.setColour(juce::Colour(0xff030304));
-        g.fillRoundedRectangle(box, 10.0f * s);
-        g.setColour(accent.withAlpha(0.6f));
-        g.drawRoundedRectangle(box, 10.0f * s, 1.5f * s);
-        g.setColour(kPale);
-        g.setFont(juce::Font(26.0f * s, juce::Font::bold));
-        g.drawFittedText(processor.getPresetName(), R(670.0f, 18.0f, 285.0f, 32.0f).toNearestInt(),
-                         juce::Justification::centred, 1, 0.6f);
-        drawLabel(g, "PRESET", 812.0f, 57.0f, 14.0f, kSteel, false);
+        const auto cell = chamfered(R(kx[i] - 74.0f, 653.0f, 148.0f, 141.0f), 14.0f * s).createPathWithRoundedCorners(3.0f * s);
+        g.setColour(juce::Colour(0xa0000000));
+        g.fillPath(cell);
+        chromeStroke(g, cell, 1.6f * s);
     }
+
+    // vortex window frame
+    {
+        const auto vr = R(380.0f, 85.0f, 910.0f, 420.0f);
+        juce::Path outer, inner;
+        outer.addRoundedRectangle(vr.expanded(3.0f * s), 24.0f * s);
+        inner.addRoundedRectangle(vr.reduced(2.0f * s), 20.0f * s);
+        chromeStroke(g, outer, 6.0f * s);
+        neonStroke(g, inner, accent, 2.0f * s, 0.9f);
+    }
+
+    // title block
+    drawCrown(g, R(68.0f, 22.0f, 84.0f, 56.0f), kGold);
+    {
+        const auto tr = R(170.0f, 14.0f, 340.0f, 56.0f);
+        g.setFont(juce::Font(46.0f * s, juce::Font::bold | juce::Font::italic));
+        g.setColour(accent.withAlpha(0.45f));
+        g.drawText("CONSTELLATION", tr.translated(0.0f, 2.5f * s).toNearestInt(), juce::Justification::left);
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xfffbfbfd), tr.getX(), tr.getY() + 6.0f * s,
+                                               juce::Colour(0xff8c8c98), tr.getX(), tr.getBottom(), false));
+        g.drawText("CONSTELLATION", tr.toNearestInt(), juce::Justification::left);
+
+        const auto xr = R(452.0f, 10.0f, 60.0f, 60.0f);
+        g.setFont(juce::Font(52.0f * s, juce::Font::bold | juce::Font::italic));
+        for (int k = 0; k < 4; ++k)
+        {
+            g.setColour(accent.withAlpha(0.14f));
+            g.drawText("X", xr.expanded((float) (k + 1) * 0.8f * s).toNearestInt(), juce::Justification::left);
+        }
+        g.setColour(accent);
+        g.drawText("X", xr.toNearestInt(), juce::Justification::left);
+    }
+    drawLabel(g, "V   O   C   A   L", 325.0f, 66.0f, 22.0f, kPale, false);
+    drawLabel(g, "CHICAGO BEATS AUDIO LABS", 322.0f, 88.0f, 15.0f, kPale.withAlpha(0.8f), false);
 
     // labels
     drawLabel(g, "SIZE", 267.0f, 464.0f, 24.0f, kPale);
@@ -610,9 +869,8 @@ void ConstellationXVocalAudioProcessorEditor::paint(juce::Graphics& g)
     drawLabel(g, "RANDOMIZER", 1490.0f, 682.0f, 24.0f, kPale);
     drawLabel(g, "SKIN SELECT", 226.0f, 834.0f, 24.0f, kPale);
     static const char* names[6] = { "REFLECTIONS", "WIDTH", "WARMTH", "AIR", "WET / DRY", "OUTPUT" };
-    static const float xs[6] = { 445.0f, 603.0f, 763.0f, 920.0f, 1077.0f, 1230.0f };
     for (int i = 0; i < 6; ++i)
-        drawLabel(g, names[i], xs[i], 667.0f, 22.0f, kPale);
+        drawLabel(g, names[i], kx[i], 667.0f, 22.0f, kPale);
 
     // direction arrows beside FORWARD / BACK
     {
@@ -620,6 +878,8 @@ void ConstellationXVocalAudioProcessorEditor::paint(juce::Graphics& g)
         juce::Path l, rr;
         l.addTriangle(P(484.0f, 548.0f), P(502.0f, 535.0f), P(502.0f, 561.0f));
         rr.addTriangle(P(1190.0f, 548.0f), P(1172.0f, 535.0f), P(1172.0f, 561.0f));
+        neonStroke(g, l, accent, 1.5f * s, 0.7f);
+        neonStroke(g, rr, accent, 1.5f * s, 0.7f);
         g.setColour(accent);
         g.fillPath(l);
         g.fillPath(rr);
@@ -628,30 +888,76 @@ void ConstellationXVocalAudioProcessorEditor::paint(juce::Graphics& g)
     // dice next to the randomizer button
     {
         auto die = R(1375.0f, 706.0f, 66.0f, 66.0f);
-        g.setColour(juce::Colour(0xff0a0a0c));
-        g.fillRoundedRectangle(die, 10.0f * s);
+        juce::Path dp;
+        dp.addRoundedRectangle(die, 10.0f * s);
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xff2b2a31), die.getX(), die.getY(),
+                                               juce::Colour(0xff060607), die.getX(), die.getBottom(), false));
+        g.fillPath(dp);
+        chromeStroke(g, dp, 2.5f * s);
         g.setColour(accent);
-        g.drawRoundedRectangle(die, 10.0f * s, 2.5f * s);
         const float dx = die.getWidth() * 0.26f, dr = die.getWidth() * 0.075f;
         const juce::Point<float> pts[5] = { { -dx, -dx }, { dx, -dx }, { 0, 0 }, { -dx, dx }, { dx, dx } };
         for (auto& pt : pts)
             g.fillEllipse(die.getCentreX() + pt.x - dr, die.getCentreY() + pt.y - dr, dr * 2.0f, dr * 2.0f);
     }
 
-    // skin swatches
+    // skin swatches (the layer is rebuilt when the skin changes)
     for (int i = 0; i < 5; ++i)
     {
         auto sw = swatchRect(i);
         const bool sel = (i == currentSkin());
+        juce::Path sp;
+        sp.addRoundedRectangle(sw, 6.0f * s);
         g.setGradientFill(juce::ColourGradient(kSkins[i].darker(0.6f), sw.getCentreX(), sw.getCentreY(),
                                                kBlack, sw.getX(), sw.getY(), true));
-        g.fillRoundedRectangle(sw, 6.0f * s);
+        g.fillPath(sp);
         g.setColour(kSkins[i].withAlpha(0.9f));
         g.fillEllipse(sw.getCentreX() - 7.0f * s, sw.getCentreY() - 7.0f * s, 14.0f * s, 14.0f * s);
-        g.setColour(sel ? kPale : kSkins[i].withAlpha(0.6f));
-        g.drawRoundedRectangle(sw, 6.0f * s, sel ? 3.0f * s : 1.5f * s);
+        if (sel)
+        {
+            neonStroke(g, sp, kSkins[i], 1.8f * s, 0.9f);
+            g.setColour(kPale);
+            g.strokePath(sp, juce::PathStrokeType(2.0f * s));
+        }
+        else
+        {
+            chromeStroke(g, sp, 1.6f * s);
+        }
     }
+}
 
+void ConstellationXVocalAudioProcessorEditor::paint(juce::Graphics& g)
+{
+    const float s = scale();
+    const auto accent = lnf.accent;
+    ensureLayers();
+
+    g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+    g.drawImage(bgImage, getLocalBounds().toFloat());
+
+    // live artwork between the cached layers
+    drawVortex(g, R(380.0f, 85.0f, 910.0f, 420.0f));
+    drawSpeaker(g, { 175.0f * s, 310.0f * s }, 165.0f * s, juce::jlimit(0.0f, 1.0f, lowL * 4.0f));
+    drawSpeaker(g, { 1495.0f * s, 310.0f * s }, 165.0f * s, juce::jlimit(0.0f, 1.0f, lowR * 4.0f));
+
+    g.drawImage(fgImage, getLocalBounds().toFloat());
+
+    // preset display (click to open the preset menu)
+    {
+        auto box = presetBoxRect();
+        juce::Path bp;
+        bp.addRoundedRectangle(box, 10.0f * s);
+        g.setColour(juce::Colour(0xff030304));
+        g.fillPath(bp);
+        chromeStroke(g, bp, 1.8f * s);
+        g.setColour(accent.withAlpha(0.35f));
+        g.drawRoundedRectangle(box.reduced(3.0f * s), 8.0f * s, 1.0f * s);
+        g.setColour(kPale);
+        g.setFont(juce::Font(26.0f * s, juce::Font::bold));
+        g.drawFittedText(processor.getPresetName(), R(670.0f, 18.0f, 285.0f, 32.0f).toNearestInt(),
+                         juce::Justification::centred, 1, 0.6f);
+        drawLabel(g, "PRESET", 812.0f, 57.0f, 14.0f, kSteel, false);
+    }
 }
 
 void ConstellationXVocalAudioProcessorEditor::timerCallback()
