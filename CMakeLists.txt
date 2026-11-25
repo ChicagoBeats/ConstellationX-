@@ -30,6 +30,9 @@ else()
     FetchContent_MakeAvailable(JUCE)
 endif()
 
+# The approved interface artwork is embedded in the plugin (see Source/PluginEditor.cpp).
+juce_add_binary_data(ConstellationXAssets SOURCES Assets/background.png)
+
 juce_add_plugin(ConstellationXVocal
     COMPANY_NAME "Chicago Beats Audio Labs"
     PLUGIN_MANUFACTURER_CODE ChBt
@@ -62,6 +65,7 @@ target_compile_definitions(ConstellationXVocal PUBLIC
 
 target_link_libraries(ConstellationXVocal
     PRIVATE
+        ConstellationXAssets
         juce::juce_audio_utils
     PUBLIC
         juce::juce_recommended_config_flags

@@ -21,8 +21,51 @@ Implemented and wired to real audio processing (`Source/ConstellationEngine.h`, 
 - **Dual subwoofers** - cone excursion follows the real sub-band (<150 Hz) level of the left/right input.
 - **Resizing** - fixed 16:9 aspect, everything laid out in reference-design coordinates and scaled.
 
-Not implemented yet (deliberately not drawn as dead buttons): preset browser, favorites, A/B, undo/redo,
-parameter locks. The header bar of the reference design depends on these.
+## Phase 3 additions
+
+- **Presets** - 10 factory presets (`Source/ParamTable.h`) plus user presets saved as `.cxpreset` files in
+  `%APPDATA%\Chicago Beats Audio Labs\ConstellationX Vocal\Presets`. Click the preset name or PRESETS for the menu;
+  `<` / `>` step through all presets; SAVE stores the current sound as "User Preset N".
+- **Favorites** - FAVORITES menu lists favorited presets and adds/removes the current one.
+- **A/B** - A and B slots (header buttons and the A/B button); first visit to B starts from A. Saved in plugin state.
+- **Undo / Redo** - history of sound-parameter edits (knobs, randomizer, presets, A/B), 100 steps.
+- **Resize grip** - red diagonal grip at the bottom-right, fixed 16:9.
+- **Vortex** - Forward contracts it, Back expands it (eased), with breathing and live input level on top.
+
+## Phase 4 - visual pass (chrome / carbon fiber / neon)
+
+All procedural, no image assets, so it scales cleanly and builds without extra files:
+
+- Carbon-fiber twill weave background, vignette and red atmosphere glow behind the vortex.
+- Polished chrome frame and chamfered chrome-edged panels with red neon inner lines and red floor glow.
+- Chamfered octagonal speaker housings with chrome ring, bolts, hex mesh, segmented neon that pulses with the
+  sub-band level, glossy rubber surround, grooved cone and silver crown dust cap.
+- Chrome-bezel knobs with glossy dome, neon value arc and pointer; chrome Forward/Back slider with crown thumb;
+  glossy chrome-edged buttons; chrome vortex window frame; chrome title text with neon X.
+- Static artwork is cached in two image layers (rebuilt on resize / skin change); the vortex and speaker cones
+  are painted live between them.
+
+## Phase 5 - the real artwork
+
+The approved reference image (`Assets/background.png`, 1672 x 941) is embedded in the plugin and used as the
+interface. Live controls are placed on top of the matching elements of the artwork:
+
+- Knobs, the Forward/Back slider, VFX ON/OFF, Randomizer, A / B, undo / redo (top) and the preset name box are drawn
+  live and cover the baked-in versions, so values and positions are always real.
+- The preset, favorites, A/B, undo, redo, skin arrows, hamburger (preset menu), settings and help elements of the
+  artwork are transparent hit areas over the baked icons (hover / disabled feedback only).
+- The vortex is the artwork's own spiral, cut out with a soft edge, rotated while VFX Motion is ON and zoomed by
+  Forward (contracts) / Back (expands) plus the live input level. The speaker cones are cut out of the artwork too and
+  pulse with the real left / right sub-band level.
+- Skins hue-shift the red neon / vortex / speaker glow of the artwork (chrome and the gold crown stay); the skin
+  thumbnails keep their own colours. Each skin is generated on first use and cached.
+- If the artwork cannot be decoded the previous drawn interface is used as a fallback.
+
+To change the artwork replace `Assets/background.png` (keep it 16:9; control positions are defined in reference
+coordinates in `PluginEditor.cpp::resized()`).
+
+Not implemented yet: parameter locks, rename/delete of user presets inside the plugin (use "Open preset folder"),
+hamburger/settings/help buttons from the reference header, and the chrome / carbon-fiber artwork pass.
 
 ## CI
 
