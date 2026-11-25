@@ -6,6 +6,8 @@
 #include <random>
 #include <vector>
 
+int runPresetTests();
+
 static int failures = 0;
 #define CHECK(cond, ...)                                                    \
     do {                                                                    \
@@ -213,6 +215,9 @@ int main()
         CHECK(maxJump < 0.05, "max sample-to-sample step during -24 dB change = %.4f", maxJump);
         CHECK(std::fabs(l[l.size() - 1]) < 0.5f * 0.2f, "gain actually reduced after change");
     }
+
+    std::printf("\n== Presets, parameter table and undo history\n");
+    failures += runPresetTests();
 
     std::printf("\n%s (%d failure%s)\n", failures ? "TESTS FAILED" : "ALL TESTS PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
